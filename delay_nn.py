@@ -307,90 +307,356 @@ class DelayNN:
 
 
 # ============================================================
-# DEMO TRAINING
+# REAL TRAFFIC GRAPH TRAINING
+# ============================================================
+
+from traffic_simulation import (
+    load_local_pbf,
+    PBF_FILE_PATH
+)
+
+from disruption_engine import DisruptionEngine
+
+
+def generate_training_data(
+    graph,
+    disruption_engine,
+    samples_per_type=100
+):
+
+    X = []
+    y = []
+
+    edges = list(
+        graph.edges()
+    )
+
+    if not edges:
+
+        raise ValueError(
+            "Graph contains no edges."
+        )
+
+    # --------------------------------------------------------
+    # NORMAL ROAD SAMPLES
+    # --------------------------------------------------------
+
+    for _ in range(samples_per_type):
+
+        u, v = edges[
+            np.random.randint(
+                0,
+                len(edges)
+            )
+        ]
+
+        edge = graph[u][v]
+
+        distance = edge.get(
+            "distance",
+            0.0
+        )
+
+        avg_speed = edge.get(
+            "avg_speed",
+            0.0
+        )
+
+        normal_time = edge.get(
+            "normal_time",
+            0.0
+        )
+
+        # No disruption
+        disruption_factor = 1
+
+        disruption_type = 0
+
+        # Delay = 0
+        delay = 0.0
+
+        X.append([
+            distance,
+            avg_speed,
+            normal_time,
+            disruption_factor,
+            disruption_type
+        ])
+
+        y.append(
+            delay
+        )
+
+    # --------------------------------------------------------
+    # ACCIDENT SAMPLES
+    # --------------------------------------------------------
+
+    for _ in range(samples_per_type):
+
+        u, v = edges[
+            np.random.randint(
+                0,
+                len(edges)
+            )
+        ]
+
+        edge = graph[u][v]
+
+        distance = edge.get(
+            "distance",
+            0.0
+        )
+
+        avg_speed = edge.get(
+            "avg_speed",
+            0.0
+        )
+
+        normal_time = edge.get(
+            "normal_time",
+            0.0
+        )
+
+        disruption_factor = 3
+
+        disruption_type = 1
+
+        # ----------------------------------------------------
+        # Actual accident
+        # ----------------------------------------------------
+
+        success = disruption_engine.add_accident(
+            u,
+            v,
+            factor=3
+        )
+
+        if not success:
+            continue
+
+        disrupted_time = graph[u][v].get(
+            "weight",
+            normal_time
+        )
+
+        delay = max(
+            0.0,
+            disrupted_time - normal_time
+        )
+
+        X.append([
+            distance,
+            avg_speed,
+            normal_time,
+            disruption_factor,
+            disruption_type
+        ])
+
+        y.append(
+            delay
+        )
+
+        # Restore
+        disruption_engine.restore_road(
+            u,
+            v
+        )
+
+    # --------------------------------------------------------
+    # CONSTRUCTION SAMPLES
+    # --------------------------------------------------------
+
+    for _ in range(samples_per_type):
+
+        u, v = edges[
+            np.random.randint(
+                0,
+                len(edges)
+            )
+        ]
+
+        edge = graph[u][v]
+
+        distance = edge.get(
+            "distance",
+            0.0
+        )
+
+        avg_speed = edge.get(
+            "avg_speed",
+            0.0
+        )
+
+        normal_time = edge.get(
+            "normal_time",
+            0.0
+        )
+
+        disruption_factor = 2
+
+        disruption_type = 2
+
+        # ----------------------------------------------------
+        # Actual construction
+        # ----------------------------------------------------
+
+        success = disruption_engine.add_construction(
+            u,
+            v,
+            factor=2
+        )
+
+        if not success:
+            continue
+
+        disrupted_time = graph[u][v].get(
+            "weight",
+            normal_time
+        )
+
+        delay = max(
+            0.0,
+            disrupted_time - normal_time
+        )
+
+        X.append([
+            distance,
+            avg_speed,
+            normal_time,
+            disruption_factor,
+            disruption_type
+        ])
+
+        y.append(
+            delay
+        )
+
+        # Restore
+        disruption_engine.restore_road(
+            u,
+            v
+        )
+
+    # --------------------------------------------------------
+    # BLOCKED ROAD SAMPLES
+    # --------------------------------------------------------
+
+    for _ in range(samples_per_type):
+
+        u, v = edges[
+            np.random.randint(
+                0,
+                len(edges)
+            )
+        ]
+
+        edge = graph[u][v]
+
+        distance = edge.get(
+            "distance",
+            0.0
+        )
+
+        avg_speed = edge.get(
+            "avg_speed",
+            0.0
+        )
+
+        normal_time = edge.get(
+            "normal_time",
+            0.0
+        )
+
+        disruption_factor = 0
+
+        disruption_type = 3
+
+        # ----------------------------------------------------
+        # A blocked edge has no finite edge travel time.
+        #
+        # We represent its delay as normal_time for this
+        # edge. Route-level rerouting will be handled later.
+        # ----------------------------------------------------
+
+        delay = normal_time
+
+        X.append([
+            distance,
+            avg_speed,
+            normal_time,
+            disruption_factor,
+            disruption_type
+        ])
+
+        y.append(
+            delay
+        )
+
+    return (
+        np.array(X, dtype=float),
+        np.array(y, dtype=float)
+    )
+
+
+# ============================================================
+# TRAIN USING REAL ROAD DATA
 # ============================================================
 
 if __name__ == "__main__":
 
-    # --------------------------------------------------------
-    # Example training data
-    #
-    # Each row:
-    #
-    # distance
-    # avg_speed
-    # normal_time
-    # disruption_factor
-    # disruption_type
-    # --------------------------------------------------------
+    print("\n==============================")
+    print("   LOADING TRAFFIC GRAPH")
+    print("==============================")
 
-    X = np.array([
+    graph, roundabout_nodes = (
+        load_local_pbf(
+            PBF_FILE_PATH
+        )
+    )
 
-        [500, 10, 50, 1, 0],
-        [600, 12, 50, 1, 0],
-        [800, 16, 50, 1, 0],
-        [400, 8, 50, 3, 1],
-        [600, 10, 60, 3, 1],
-        [1000, 20, 50, 3, 1],
-        [500, 10, 50, 2, 2],
-        [700, 14, 50, 2, 2],
-        [900, 18, 50, 2, 2],
+    print(
+        f"Nodes: {len(graph.nodes)}"
+    )
 
-        [400, 8, 50, 1, 0],
-        [700, 14, 50, 1, 0],
-        [900, 18, 50, 1, 0],
-
-        [500, 10, 50, 3, 1],
-        [800, 16, 50, 3, 1],
-        [1200, 24, 50, 3, 1],
-
-        [500, 10, 50, 2, 2],
-        [800, 16, 50, 2, 2],
-        [1200, 24, 50, 2, 2]
-    ])
+    print(
+        f"Edges: {len(graph.edges)}"
+    )
 
     # --------------------------------------------------------
-    # Actual delay
-    #
-    # accident:
-    #
-    # delay = normal_time * 3 - normal_time
-    #
-    # construction:
-    #
-    # delay = normal_time * 2 - normal_time
-    #
-    # normal:
-    #
-    # delay = 0
+    # Create disruption engine
     # --------------------------------------------------------
 
-    y = np.array([
+    disruption_engine = (
+        DisruptionEngine(
+            graph
+        )
+    )
 
-        0,
-        0,
-        0,
+    # --------------------------------------------------------
+    # Generate REAL training data
+    # --------------------------------------------------------
 
-        100,
-        120,
-        100,
+    print("\n==============================")
+    print("   GENERATING TRAINING DATA")
+    print("==============================")
 
-        50,
-        50,
-        50,
+    X, y = generate_training_data(
+        graph,
+        disruption_engine,
+        samples_per_type=500
+    )
 
-        0,
-        0,
-        0,
+    print(
+        f"Training samples generated: {len(X)}"
+    )
 
-        100,
-        100,
-        100,
+    print(
+        f"Feature shape: {X.shape}"
+    )
 
-        50,
-        50,
-        50
-    ])
+    print(
+        f"Target shape: {y.shape}"
+    )
 
     # --------------------------------------------------------
     # Create NN
@@ -402,30 +668,88 @@ if __name__ == "__main__":
     # Train
     # --------------------------------------------------------
 
-    nn.train(
+    results = nn.train(
         X,
         y
     )
 
     # --------------------------------------------------------
-    # Test prediction
+    # Example prediction using REAL road data
     # --------------------------------------------------------
 
-    predicted = nn.predict_delay(
+    test_edge = list(
+        graph.edges()
+    )[0]
 
-        distance=600,
+    u, v = test_edge
 
-        avg_speed=10,
+    edge = graph[u][v]
 
-        normal_time=60,
+    predicted_delay = nn.predict_delay(
+
+        distance=edge.get(
+            "distance",
+            0.0
+        ),
+
+        avg_speed=edge.get(
+            "avg_speed",
+            0.0
+        ),
+
+        normal_time=edge.get(
+            "normal_time",
+            0.0
+        ),
 
         disruption_factor=3,
 
         disruption_type="accident"
     )
 
+    print("\n==============================")
+    print("       REAL NN PREDICTION")
+    print("==============================")
+
     print(
-        "Predicted delay:",
-        round(predicted, 2),
-        "seconds"
+        "Road:",
+        (u, v)
     )
+
+    print(
+        "Distance:",
+        round(
+            edge["distance"],
+            2
+        ),
+        "m"
+    )
+
+    print(
+        "Average speed:",
+        round(
+            edge["avg_speed"],
+            2
+        ),
+        "m/s"
+    )
+
+    print(
+        "Normal time:",
+        round(
+            edge["normal_time"],
+            2
+        ),
+        "s"
+    )
+
+    print(
+        "Predicted accident delay:",
+        round(
+            predicted_delay,
+            2
+        ),
+        "s"
+    )
+
+    print("==============================")
