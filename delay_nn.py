@@ -66,10 +66,6 @@ class DelayNN:
             0 -> normal
             1 -> accident
             3 -> blocked
-
-        Target:
-
-            actual delay in seconds
         """
 
         X = np.asarray(
@@ -82,16 +78,20 @@ class DelayNN:
             dtype=float
         )
 
+        # ----------------------------------------------------
+        # Check training data
+        # ----------------------------------------------------
+
         if len(X) == 0:
 
             raise ValueError(
-                "No training data available."
+                "No training data was generated."
             )
 
         if len(X) != len(y):
 
             raise ValueError(
-                "X and y must contain the same number of samples."
+                "X and y must have the same number of samples."
             )
 
         # ----------------------------------------------------
@@ -106,7 +106,7 @@ class DelayNN:
         )
 
         # ----------------------------------------------------
-        # Scale input features
+        # Scale features
         # ----------------------------------------------------
 
         X_train_scaled = self.scaler.fit_transform(
@@ -118,7 +118,7 @@ class DelayNN:
         )
 
         # ----------------------------------------------------
-        # Train neural network
+        # Train NN
         # ----------------------------------------------------
 
         self.model.fit(
@@ -135,16 +135,6 @@ class DelayNN:
         predictions = self.model.predict(
             X_test_scaled
         )
-
-        # Delay cannot be negative
-        predictions = np.maximum(
-            predictions,
-            0.0
-        )
-
-        # ----------------------------------------------------
-        # Metrics
-        # ----------------------------------------------------
 
         mae = mean_absolute_error(
             y_test,
@@ -164,7 +154,7 @@ class DelayNN:
         )
 
         # ----------------------------------------------------
-        # Print results
+        # Display results
         # ----------------------------------------------------
 
         print("\n==============================")
@@ -223,32 +213,46 @@ class DelayNN:
                 "Train the neural network first."
             )
 
-        # ----------------------------------------------------
-        # Encode disruption type
-        # ----------------------------------------------------
+        # ====================================================
+        # NORMAL ROAD
+        # ====================================================
 
         if disruption_type == "normal":
 
-            type_value = 0
+            return 0.0
 
-        elif disruption_type == "accident":
+        # ====================================================
+        # BLOCKED ROAD
+        # ====================================================
+
+        if disruption_type == "blocked":
+
+            # A blocked road cannot be travelled.
+            #
+            # We represent the edge delay as its normal
+            # travel time. Actual route rerouting is handled
+            # separately by the traffic graph.
+
+            return max(
+                0.0,
+                float(normal_time)
+            )
+
+        # ====================================================
+        # ENCODE DISRUPTION TYPE
+        # ====================================================
+
+        if disruption_type == "accident":
 
             type_value = 1
 
-        elif disruption_type == "blocked":
-
-            type_value = 3
-
         else:
 
-            raise ValueError(
-                "Invalid disruption type. "
-                "Use normal, accident, or blocked."
-            )
+            type_value = 0
 
-        # ----------------------------------------------------
-        # Create feature vector
-        # ----------------------------------------------------
+        # ====================================================
+        # CREATE FEATURE VECTOR
+        # ====================================================
 
         X = np.array([
             [
@@ -260,25 +264,25 @@ class DelayNN:
             ]
         ], dtype=float)
 
-        # ----------------------------------------------------
-        # Scale
-        # ----------------------------------------------------
+        # ====================================================
+        # SCALE
+        # ====================================================
 
         X_scaled = self.scaler.transform(
             X
         )
 
-        # ----------------------------------------------------
-        # Predict
-        # ----------------------------------------------------
+        # ====================================================
+        # NN PREDICTION
+        # ====================================================
 
         predicted_delay = self.model.predict(
             X_scaled
         )[0]
 
-        # ----------------------------------------------------
-        # Prevent negative delay
-        # ----------------------------------------------------
+        # ====================================================
+        # DELAY CANNOT BE NEGATIVE
+        # ====================================================
 
         predicted_delay = max(
             0.0,
@@ -288,178 +292,7 @@ class DelayNN:
         return predicted_delay
 
     # ========================================================
-    # CALCULATE ACTUAL EDGE DELAY
-    # ========================================================
-
-    def calculate_edge_delay(
-        self,
-        graph,
-        u,
-        v
-    ):
-
-        """
-        Calculates actual delay of one road.
-
-        Normal:
-            delay = 0
-
-        Accident:
-            delay = current_time - normal_time
-
-        Blocked:
-            delay = normal_time
-
-        This uses the same logic as DisruptionEngine.
-        """
-
-        if not graph.has_edge(u, v):
-
-            return 0.0
-
-        edge = graph[u][v]
-
-        normal_time = edge.get(
-            "normal_time",
-            edge.get(
-                "weight",
-                0.0
-            )
-        )
-
-        # ----------------------------------------------------
-        # BLOCKED
-        # ----------------------------------------------------
-
-        if edge.get(
-            "blocked",
-            False
-        ):
-
-            return max(
-                0.0,
-                normal_time
-            )
-
-        # ----------------------------------------------------
-        # CURRENT TRAVEL TIME
-        # ----------------------------------------------------
-
-        current_time = edge.get(
-            "weight",
-            normal_time
-        )
-
-        # ----------------------------------------------------
-        # DELAY
-        # ----------------------------------------------------
-
-        delay = (
-            current_time
-            -
-            normal_time
-        )
-
-        return max(
-            0.0,
-            delay
-        )
-
-    # ========================================================
-    # CALCULATE ACTUAL ROUTE DELAY
-    # ========================================================
-
-    def calculate_route_delay(
-        self,
-        graph,
-        route
-    ):
-
-        """
-        Calculates total actual delay for a route.
-
-        Returns None if the route contains a blocked road.
-        """
-
-        if route is None:
-
-            return 0.0
-
-        if len(route) < 2:
-
-            return 0.0
-
-        normal_total = 0.0
-
-        current_total = 0.0
-
-        for u, v in zip(
-            route[:-1],
-            route[1:]
-        ):
-
-            if not graph.has_edge(
-                u,
-                v
-            ):
-
-                return 0.0
-
-            edge = graph[u][v]
-
-            # ------------------------------------------------
-            # BLOCKED ROAD
-            # ------------------------------------------------
-
-            if edge.get(
-                "blocked",
-                False
-            ):
-
-                return None
-
-            # ------------------------------------------------
-            # NORMAL TIME
-            # ------------------------------------------------
-
-            normal_time = edge.get(
-                "normal_time",
-                edge.get(
-                    "weight",
-                    0.0
-                )
-            )
-
-            # ------------------------------------------------
-            # CURRENT TIME
-            # ------------------------------------------------
-
-            current_time = edge.get(
-                "weight",
-                normal_time
-            )
-
-            normal_total += normal_time
-
-            current_total += current_time
-
-        # ----------------------------------------------------
-        # TOTAL DELAY
-        # ----------------------------------------------------
-
-        delay = (
-            current_total
-            -
-            normal_total
-        )
-
-        return max(
-            0.0,
-            delay
-        )
-
-    # ========================================================
-    # CHOOSE LOWEST PREDICTED DELAY
+    # CHOOSE LOWEST DELAY
     # ========================================================
 
     def choose_best_option(
@@ -487,6 +320,15 @@ class DelayNN:
                 "normal_time": 46.67,
                 "disruption_factor": 1,
                 "disruption_type": "normal"
+            },
+
+            {
+                "name": "Route C",
+                "distance": 600,
+                "avg_speed": 12,
+                "normal_time": 50,
+                "disruption_factor": 0,
+                "disruption_type": "blocked"
             }
         ]
         """
@@ -496,10 +338,6 @@ class DelayNN:
             raise RuntimeError(
                 "Train the neural network first."
             )
-
-        if not options:
-
-            return None, []
 
         results = []
 
@@ -522,11 +360,12 @@ class DelayNN:
 
                 "name": option["name"],
 
-                "predicted_delay": predicted_delay
+                "predicted_delay":
+                    predicted_delay
             })
 
         # ----------------------------------------------------
-        # Find lowest predicted delay
+        # Find minimum predicted delay
         # ----------------------------------------------------
 
         best = min(
@@ -538,7 +377,7 @@ class DelayNN:
 
 
 # ============================================================
-# GENERATE REAL TRAINING DATA
+# GENERATE REAL TRAFFIC TRAINING DATA
 # ============================================================
 
 def generate_training_data(
@@ -549,6 +388,10 @@ def generate_training_data(
 
     X = []
     y = []
+
+    # --------------------------------------------------------
+    # Get graph edges
+    # --------------------------------------------------------
 
     edges = list(
         graph.edges()
@@ -593,13 +436,11 @@ def generate_training_data(
             )
         )
 
-        # ----------------------------------------------------
-        # NORMAL ROAD
-        # ----------------------------------------------------
-
         disruption_factor = 1
 
         disruption_type = 0
+
+        # Normal road has no delay.
 
         delay = 0.0
 
@@ -667,19 +508,21 @@ def generate_training_data(
             continue
 
         # ----------------------------------------------------
-        # Calculate actual delay
+        # Get disrupted travel time
         # ----------------------------------------------------
 
-        current_time = graph[u][v].get(
+        disrupted_time = graph[u][v].get(
             "weight",
             normal_time
         )
 
+        # ----------------------------------------------------
+        # Calculate actual delay
+        # ----------------------------------------------------
+
         delay = max(
             0.0,
-            current_time
-            -
-            normal_time
+            disrupted_time - normal_time
         )
 
         X.append([
@@ -741,20 +584,15 @@ def generate_training_data(
         disruption_type = 3
 
         # ----------------------------------------------------
-        # Block road
+        # Blocked road
         # ----------------------------------------------------
-
-        success = disruption_engine.block_road(
-            u,
-            v
-        )
-
-        if not success:
-
-            continue
-
-        # ----------------------------------------------------
-        # Blocked road gets finite delay target
+        #
+        # There is no finite travel time for a blocked edge.
+        #
+        # We represent its edge-level delay as normal_time.
+        #
+        # The actual route-level behaviour is handled by
+        # rerouting around the blocked road.
         # ----------------------------------------------------
 
         delay = max(
@@ -774,17 +612,8 @@ def generate_training_data(
             delay
         )
 
-        # ----------------------------------------------------
-        # Restore road
-        # ----------------------------------------------------
-
-        disruption_engine.restore_road(
-            u,
-            v
-        )
-
     # ========================================================
-    # CONVERT TO NUMPY
+    # CONVERT TO NUMPY ARRAYS
     # ========================================================
 
     X = np.array(
@@ -796,12 +625,6 @@ def generate_training_data(
         y,
         dtype=float
     )
-
-    if len(X) == 0:
-
-        raise ValueError(
-            "No training samples were generated."
-        )
 
     return X, y
 
@@ -816,18 +639,20 @@ if __name__ == "__main__":
     print("   LOADING TRAFFIC GRAPH")
     print("==============================")
 
+    # --------------------------------------------------------
+    # Load graph
+    # --------------------------------------------------------
+
     graph, roundabout_nodes = load_local_pbf(
         PBF_FILE_PATH
     )
 
     print(
-        "Nodes:",
-        len(graph.nodes)
+        f"Nodes: {len(graph.nodes)}"
     )
 
     print(
-        "Edges:",
-        len(graph.edges)
+        f"Edges: {len(graph.edges)}"
     )
 
     # ========================================================
@@ -868,7 +693,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # CREATE NN
+    # CREATE NEURAL NETWORK
     # ========================================================
 
     nn = DelayNN()
@@ -883,7 +708,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # TEST REAL ACCIDENT PREDICTION
+    # TEST ACCIDENT PREDICTION
     # ========================================================
 
     test_edge = list(
@@ -894,7 +719,11 @@ if __name__ == "__main__":
 
     edge = graph[u][v]
 
-    predicted_delay = nn.predict_delay(
+    # --------------------------------------------------------
+    # Accident prediction
+    # --------------------------------------------------------
+
+    predicted_accident_delay = nn.predict_delay(
 
         distance=edge.get(
             "distance",
@@ -915,6 +744,36 @@ if __name__ == "__main__":
 
         disruption_type="accident"
     )
+
+    # --------------------------------------------------------
+    # Blocked prediction
+    # --------------------------------------------------------
+
+    predicted_blocked_delay = nn.predict_delay(
+
+        distance=edge.get(
+            "distance",
+            0.0
+        ),
+
+        avg_speed=edge.get(
+            "avg_speed",
+            0.0
+        ),
+
+        normal_time=edge.get(
+            "normal_time",
+            0.0
+        ),
+
+        disruption_factor=0,
+
+        disruption_type="blocked"
+    )
+
+    # ========================================================
+    # DISPLAY RESULTS
+    # ========================================================
 
     print("\n==============================")
     print("       REAL NN PREDICTION")
@@ -964,7 +823,16 @@ if __name__ == "__main__":
     print(
         "Predicted accident delay:",
         round(
-            predicted_delay,
+            predicted_accident_delay,
+            2
+        ),
+        "s"
+    )
+
+    print(
+        "Blocked road delay:",
+        round(
+            predicted_blocked_delay,
             2
         ),
         "s"
