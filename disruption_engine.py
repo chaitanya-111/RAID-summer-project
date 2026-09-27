@@ -185,9 +185,7 @@ class DisruptionEngine:
             normal_time * factor
         )
 
-        # ----------------------------------------------------
-        # Update current graph
-        # ----------------------------------------------------
+        ##update current graph
 
         self.graph[u][v]["weight"] = (
             disrupted_time
