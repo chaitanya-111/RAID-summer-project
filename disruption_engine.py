@@ -4,82 +4,33 @@ import random
 class DisruptionEngine:
 
     def __init__(self, graph):
-        """
-        graph:
-            NetworkX DiGraph used by the traffic simulator.
-
-        Every edge contains:
-
-            distance      -> physical road distance in meters
-            avg_speed     -> average road speed in m/s
-            normal_time   -> travel time without disruption
-            weight        -> current travel time used by Dijkstra
-            blocked       -> whether road is blocked
-            highway       -> road type
-            disruption   -> current disruption type
-        """
 
         self.graph = graph
 
         # ====================================================
-        # STORE ORIGINAL STATE OF EVERY EDGE
+        # SAVE ORIGINAL EDGE DATA
         # ====================================================
 
         self.original_graph = {}
 
         for u, v, data in graph.edges(data=True):
 
+            normal_time = data.get(
+                "normal_time",
+                data.get("weight", 1.0)
+            )
+
             self.original_graph[(u, v)] = {
-
-                # Physical road distance
-                "distance": data.get(
-                    "distance",
-                    1.0
-                ),
-
-                # Average speed of vehicles on this road
-                "avg_speed": data.get(
-                    "avg_speed",
-                    1.0
-                ),
-
-                # Travel time without any disruption
-                "normal_time": data.get(
-                    "normal_time",
-                    data.get(
-                        "weight",
-                        1.0
-                    )
-                ),
-
-                # Original weight
-                # Initially this is equal to normal_time
-                "weight": data.get(
-                    "weight",
-                    1.0
-                ),
-
-                # Original blocked state
-                "blocked": data.get(
-                    "blocked",
-                    False
-                ),
-
-                # Road type
-                "highway": data.get(
-                    "highway"
-                ),
-
-                # Original disruption state
-                "disruption": data.get(
-                    "disruption"
-                )
+                "distance": data.get("distance", 1.0),
+                "avg_speed": data.get("avg_speed", 1.0),
+                "normal_time": normal_time,
+                "weight": data.get("weight", normal_time),
+                "blocked": data.get("blocked", False),
+                "highway": data.get("highway"),
+                "disruption": data.get("disruption")
             }
 
-        # ====================================================
-        # CURRENT ACTIVE DISRUPTIONS
-        # ====================================================
-
+        # Currently active disruptions
         self.active_disruptions = {}
 
     # ========================================================
@@ -88,50 +39,22 @@ class DisruptionEngine:
 
     def block_road(self, u, v):
 
-        """
-        Completely blocks a road.
-
-        Both directions are blocked if the reverse
-        edge exists.
-
-        The normal_time is NOT changed.
-
-        Only the blocked status changes.
-        """
-
         if not self.graph.has_edge(u, v):
-
             return False
 
-        # ----------------------------------------------------
-        # Block u -> v
-        # ----------------------------------------------------
-
+        # Block forward edge
         self.graph[u][v]["blocked"] = True
-
         self.graph[u][v]["disruption"] = "blocked"
 
-        # ----------------------------------------------------
-        # Block reverse direction if it exists
-        # ----------------------------------------------------
-
+        # Block reverse edge if it exists
         if self.graph.has_edge(v, u):
 
             self.graph[v][u]["blocked"] = True
-
             self.graph[v][u]["disruption"] = "blocked"
 
-        # ----------------------------------------------------
-        # Store disruption
-        # ----------------------------------------------------
-
         self.active_disruptions[(u, v)] = {
-
             "type": "blocked",
-
-            "factor": None,
-
-            "delay_per_edge": float("inf")
+            "factor": None
         }
 
         return True
@@ -140,381 +63,214 @@ class DisruptionEngine:
     # ADD ACCIDENT
     # ========================================================
 
-    def add_accident(
-        self,
-        u,
-        v,
-        factor=3
-    ):
-
-        """
-        Accident increases travel time.
-
-        Example:
-
-            normal_time = 20 seconds
-            factor = 3
-
-            disrupted_time = 60 seconds
-
-        normal_time remains unchanged.
-        weight becomes the disrupted travel time.
-        """
+    def add_accident(self, u, v, factor=3):
 
         if not self.graph.has_edge(u, v):
-
             return False
-
-        # ====================================================
-        # FORWARD EDGE
-        # ====================================================
 
         if (u, v) not in self.original_graph:
-
             return False
 
-        original = self.original_graph[
-            (u, v)
-        ]
+        # ----------------------------------------------------
+        # FORWARD EDGE
+        # ----------------------------------------------------
 
-        normal_time = original[
-            "normal_time"
-        ]
+        original = self.original_graph[(u, v)]
 
-        disrupted_time = (
-            normal_time * factor
-        )
+        normal_time = original["normal_time"]
 
-        ##update current graph
+        disrupted_time = normal_time * factor
 
-        self.graph[u][v]["weight"] = (
-            disrupted_time
-        )
-
+        self.graph[u][v]["weight"] = disrupted_time
         self.graph[u][v]["blocked"] = False
+        self.graph[u][v]["disruption"] = "accident"
 
-        self.graph[u][v]["disruption"] = (
-            "accident"
-        )
-
-        # ====================================================
+        # ----------------------------------------------------
         # REVERSE EDGE
-        # ====================================================
-
-        reverse_delay = (
-            disrupted_time
-            -
-            normal_time
-        )
+        # ----------------------------------------------------
 
         if self.graph.has_edge(v, u):
 
             if (v, u) in self.original_graph:
 
-                reverse_original = (
-                    self.original_graph[
-                        (v, u)
-                    ]
-                )
+                reverse_original = self.original_graph[(v, u)]
 
                 reverse_normal_time = (
-                    reverse_original[
-                        "normal_time"
-                    ]
+                    reverse_original["normal_time"]
                 )
 
                 reverse_disrupted_time = (
-                    reverse_normal_time
-                    *
-                    factor
+                    reverse_normal_time * factor
                 )
 
-                self.graph[v][u][
-                    "weight"
-                ] = (
+                self.graph[v][u]["weight"] = (
                     reverse_disrupted_time
                 )
 
-                self.graph[v][u][
-                    "blocked"
-                ] = False
+                self.graph[v][u]["blocked"] = False
 
-                self.graph[v][u][
-                    "disruption"
-                ] = "accident"
+                self.graph[v][u]["disruption"] = (
+                    "accident"
+                )
 
-        # ====================================================
-        # STORE ACTIVE DISRUPTION
-        # ====================================================
+        # ----------------------------------------------------
+        # STORE DISRUPTION
+        # ----------------------------------------------------
 
         self.active_disruptions[(u, v)] = {
-
             "type": "accident",
-
-            "factor": factor,
-
-            "delay_per_edge": reverse_delay
+            "factor": factor
         }
 
         return True
 
     # ========================================================
-    # ADD CONSTRUCTION
-    # ========================================================
-
-    def add_construction(
-        self,
-        u,
-        v,
-        factor=2
-    ):
-
-        """
-        Construction increases travel time.
-
-        Example:
-
-            normal_time = 20 seconds
-            factor = 2
-
-            disrupted_time = 40 seconds
-        """
-
-        if not self.graph.has_edge(u, v):
-
-            return False
-
-        # ====================================================
-        # FORWARD EDGE
-        # ====================================================
-
-        if (u, v) not in self.original_graph:
-
-            return False
-
-        original = self.original_graph[
-            (u, v)
-        ]
-
-        normal_time = original[
-            "normal_time"
-        ]
-
-        disrupted_time = (
-            normal_time * factor
-        )
-
-        # ----------------------------------------------------
-        # Update current graph
-        # ----------------------------------------------------
-
-        self.graph[u][v]["weight"] = (
-            disrupted_time
-        )
-
-        self.graph[u][v]["blocked"] = False
-
-        self.graph[u][v]["disruption"] = (
-            "construction"
-        )
-
-        # ====================================================
-        # REVERSE EDGE
-        # ====================================================
-
-        if self.graph.has_edge(v, u):
-
-            if (v, u) in self.original_graph:
-
-                reverse_original = (
-                    self.original_graph[
-                        (v, u)
-                    ]
-                )
-
-                reverse_normal_time = (
-                    reverse_original[
-                        "normal_time"
-                    ]
-                )
-
-                reverse_disrupted_time = (
-                    reverse_normal_time
-                    *
-                    factor
-                )
-
-                self.graph[v][u][
-                    "weight"
-                ] = (
-                    reverse_disrupted_time
-                )
-
-                self.graph[v][u][
-                    "blocked"
-                ] = False
-
-                self.graph[v][u][
-                    "disruption"
-                ] = "construction"
-
-        # ====================================================
-        # STORE ACTIVE DISRUPTION
-        # ====================================================
-
-        self.active_disruptions[(u, v)] = {
-
-            "type": "construction",
-
-            "factor": factor,
-
-            "delay_per_edge": (
-                disrupted_time
-                -
-                normal_time
-            )
-        }
-
-        return True
-
-    # ========================================================
-    # CALCULATE EDGE DELAY
+    # GET DELAY OF ONE EDGE
     # ========================================================
 
     def get_edge_delay(self, u, v):
 
         """
-        Returns:
+        Returns delay of one edge.
 
-            current travel time
-            -
-            normal travel time
+        Normal road:
+            delay = 0
+
+        Accident:
+            delay = current_time - normal_time
+
+        Blocked:
+            returns normal_time
+
+        The blocked value is used as a finite penalty for
+        NN training. A blocked road itself cannot be travelled.
         """
 
         if not self.graph.has_edge(u, v):
+            return 0.0
 
-            return float("inf")
+        edge = self.graph[u][v]
 
-        current_weight = self.graph[u][v].get(
-            "weight",
-            0.0
-        )
-
-        normal_time = self.graph[u][v].get(
+        normal_time = edge.get(
             "normal_time",
-            current_weight
+            edge.get("weight", 0.0)
         )
 
-        if self.graph[u][v].get(
-            "blocked",
-            False
-        ):
-
-            return float("inf")
-
-        return max(
-            0.0,
-            current_weight
-            -
+        current_time = edge.get(
+            "weight",
             normal_time
         )
 
+        # ----------------------------------------------------
+        # BLOCKED ROAD
+        # ----------------------------------------------------
+
+        if edge.get("blocked", False):
+
+            return max(
+                0.0,
+                normal_time
+            )
+
+        # ----------------------------------------------------
+        # NORMAL / ACCIDENT
+        # ----------------------------------------------------
+
+        delay = current_time - normal_time
+
+        return max(
+            0.0,
+            delay
+        )
+
     # ========================================================
-    # CALCULATE ROUTE DELAY
+    # CALCULATE DELAY FOR A ROUTE
     # ========================================================
 
-    def calculate_route_delay(
-        self,
-        route
-    ):
+    def calculate_route_delay(self, route):
 
         """
-        Calculates total delay for an entire route.
+        Calculates total delay of a route.
 
-        delay =
-            disrupted route time
-            -
-            normal route time
+        For a usable route:
+
+            delay =
+                current route time
+                -
+                normal route time
+
+        If route contains a blocked road:
+            returns None
+
+        This avoids infinity errors.
         """
 
-        if not route or len(route) < 2:
-
+        if route is None:
             return 0.0
 
-        normal_time = 0.0
+        if len(route) < 2:
+            return 0.0
 
-        current_time = 0.0
+        normal_total = 0.0
+        current_total = 0.0
 
         for u, v in zip(
             route[:-1],
             route[1:]
         ):
 
-            if not self.graph.has_edge(
-                u,
-                v
-            ):
+            if not self.graph.has_edge(u, v):
 
-                return float("inf")
+                return 0.0
 
             edge = self.graph[u][v]
 
             # ------------------------------------------------
-            # If road is blocked
+            # BLOCKED ROUTE
             # ------------------------------------------------
 
-            if edge.get(
-                "blocked",
-                False
-            ):
+            if edge.get("blocked", False):
 
-                return float("inf")
+                return None
 
             # ------------------------------------------------
-            # Normal travel time
+            # NORMAL TIME
             # ------------------------------------------------
 
-            normal_time += edge.get(
+            normal_time = edge.get(
                 "normal_time",
-                edge.get(
-                    "weight",
-                    0.0
-                )
+                edge.get("weight", 0.0)
             )
 
             # ------------------------------------------------
-            # Current/disrupted travel time
+            # CURRENT TIME
             # ------------------------------------------------
 
-            current_time += edge.get(
+            current_time = edge.get(
                 "weight",
-                edge.get(
-                    "normal_time",
-                    0.0
-                )
+                normal_time
             )
 
+            normal_total += normal_time
+
+            current_total += current_time
+
         # ----------------------------------------------------
-        # Delay
+        # TOTAL DELAY
         # ----------------------------------------------------
 
-        delay = max(
+        delay = current_total - normal_total
+
+        return max(
             0.0,
-            current_time
-            -
-            normal_time
+            delay
         )
-
-        return delay
 
     # ========================================================
     # GET ROUTE TIMES
     # ========================================================
 
-    def get_route_times(
-        self,
-        route
-    ):
+    def get_route_times(self, route):
 
         """
         Returns:
@@ -524,7 +280,7 @@ class DisruptionEngine:
             delay
         """
 
-        if not route or len(route) < 2:
+        if route is None or len(route) < 2:
 
             return {
                 "normal_time": 0.0,
@@ -532,231 +288,148 @@ class DisruptionEngine:
                 "delay": 0.0
             }
 
-        normal_time = 0.0
-
-        current_time = 0.0
+        normal_total = 0.0
+        current_total = 0.0
 
         for u, v in zip(
             route[:-1],
             route[1:]
         ):
 
-            if not self.graph.has_edge(
-                u,
-                v
-            ):
+            if not self.graph.has_edge(u, v):
 
                 return {
-                    "normal_time": float("inf"),
-                    "current_time": float("inf"),
-                    "delay": float("inf")
+                    "normal_time": 0.0,
+                    "current_time": 0.0,
+                    "delay": 0.0
                 }
 
             edge = self.graph[u][v]
 
-            if edge.get(
-                "blocked",
-                False
-            ):
+            # ------------------------------------------------
+            # BLOCKED ROAD
+            # ------------------------------------------------
+
+            if edge.get("blocked", False):
 
                 return {
-                    "normal_time": (
-                        normal_time
-                        +
-                        edge.get(
-                            "normal_time",
-                            0.0
-                        )
-                    ),
-                    "current_time": float("inf"),
-                    "delay": float("inf")
+                    "normal_time": normal_total,
+                    "current_time": None,
+                    "delay": None
                 }
 
-            normal_time += edge.get(
+            normal_time = edge.get(
                 "normal_time",
-                edge.get(
-                    "weight",
-                    0.0
-                )
+                edge.get("weight", 0.0)
             )
 
-            current_time += edge.get(
+            current_time = edge.get(
                 "weight",
-                edge.get(
-                    "normal_time",
-                    0.0
-                )
+                normal_time
             )
+
+            normal_total += normal_time
+
+            current_total += current_time
 
         delay = max(
             0.0,
-            current_time
-            -
-            normal_time
+            current_total - normal_total
         )
 
         return {
-            "normal_time": normal_time,
-            "current_time": current_time,
+            "normal_time": normal_total,
+            "current_time": current_total,
             "delay": delay
         }
 
     # ========================================================
-    # RESTORE ROAD
+    # RESTORE ONE ROAD
     # ========================================================
 
-    def restore_road(
-        self,
-        u,
-        v
-    ):
+    def restore_road(self, u, v):
 
-        """
-        Restores the road completely to its original state.
-
-        This restores:
-
-            distance
-            avg_speed
-            normal_time
-            weight
-            blocked
-            highway
-            disruption
-        """
-
-        if (
-            u,
-            v
-        ) not in self.active_disruptions:
-
+        if (u, v) not in self.active_disruptions:
             return False
 
-        # ====================================================
+        # ----------------------------------------------------
         # RESTORE u -> v
-        # ====================================================
+        # ----------------------------------------------------
 
-        if self.graph.has_edge(
-            u,
-            v
-        ):
+        if self.graph.has_edge(u, v):
 
-            original = (
-                self.original_graph.get(
-                    (u, v)
-                )
-            )
+            original = self.original_graph.get((u, v))
 
             if original:
 
-                self.graph[u][v][
-                    "distance"
-                ] = original[
-                    "distance"
-                ]
+                self.graph[u][v]["distance"] = (
+                    original["distance"]
+                )
 
-                self.graph[u][v][
-                    "avg_speed"
-                ] = original[
-                    "avg_speed"
-                ]
+                self.graph[u][v]["avg_speed"] = (
+                    original["avg_speed"]
+                )
 
-                self.graph[u][v][
-                    "normal_time"
-                ] = original[
-                    "normal_time"
-                ]
+                self.graph[u][v]["normal_time"] = (
+                    original["normal_time"]
+                )
 
-                self.graph[u][v][
-                    "weight"
-                ] = original[
-                    "weight"
-                ]
+                self.graph[u][v]["weight"] = (
+                    original["weight"]
+                )
 
-                self.graph[u][v][
-                    "blocked"
-                ] = original[
-                    "blocked"
-                ]
+                self.graph[u][v]["blocked"] = (
+                    original["blocked"]
+                )
 
-                self.graph[u][v][
-                    "highway"
-                ] = original[
-                    "highway"
-                ]
+                self.graph[u][v]["highway"] = (
+                    original["highway"]
+                )
 
-                self.graph[u][v][
-                    "disruption"
-                ] = original[
-                    "disruption"
-                ]
+                self.graph[u][v]["disruption"] = (
+                    original["disruption"]
+                )
 
-        # ====================================================
+        # ----------------------------------------------------
         # RESTORE v -> u
-        # ====================================================
+        # ----------------------------------------------------
 
-        if self.graph.has_edge(
-            v,
-            u
-        ):
+        if self.graph.has_edge(v, u):
 
-            original = (
-                self.original_graph.get(
-                    (v, u)
-                )
-            )
+            original = self.original_graph.get((v, u))
 
             if original:
 
-                self.graph[v][u][
-                    "distance"
-                ] = original[
-                    "distance"
-                ]
+                self.graph[v][u]["distance"] = (
+                    original["distance"]
+                )
 
-                self.graph[v][u][
-                    "avg_speed"
-                ] = original[
-                    "avg_speed"
-                ]
+                self.graph[v][u]["avg_speed"] = (
+                    original["avg_speed"]
+                )
 
-                self.graph[v][u][
-                    "normal_time"
-                ] = original[
-                    "normal_time"
-                ]
+                self.graph[v][u]["normal_time"] = (
+                    original["normal_time"]
+                )
 
-                self.graph[v][u][
-                    "weight"
-                ] = original[
-                    "weight"
-                ]
+                self.graph[v][u]["weight"] = (
+                    original["weight"]
+                )
 
-                self.graph[v][u][
-                    "blocked"
-                ] = original[
-                    "blocked"
-                ]
+                self.graph[v][u]["blocked"] = (
+                    original["blocked"]
+                )
 
-                self.graph[v][u][
-                    "highway"
-                ] = original[
-                    "highway"
-                ]
+                self.graph[v][u]["highway"] = (
+                    original["highway"]
+                )
 
-                self.graph[v][u][
-                    "disruption"
-                ] = original[
-                    "disruption"
-                ]
+                self.graph[v][u]["disruption"] = (
+                    original["disruption"]
+                )
 
-        # ====================================================
-        # REMOVE ACTIVE DISRUPTION
-        # ====================================================
-
-        del self.active_disruptions[
-            (u, v)
-        ]
+        # Remove active disruption
+        del self.active_disruptions[(u, v)]
 
         return True
 
@@ -766,47 +439,36 @@ class DisruptionEngine:
 
     def restore_all(self):
 
-        """
-        Restore every active disruption.
-        """
-
-        for edge in list(
+        active_edges = list(
             self.active_disruptions.keys()
-        ):
+        )
+
+        for u, v in active_edges:
 
             self.restore_road(
-                edge[0],
-                edge[1]
+                u,
+                v
             )
 
         self.active_disruptions.clear()
 
     # ========================================================
-    # RANDOM ROAD
+    # GET RANDOM ROAD
     # ========================================================
 
     def get_random_road(self):
-
-        """
-        Returns a random road that currently
-        has no active disruption.
-        """
 
         available_edges = []
 
         for u, v in self.graph.edges():
 
-            if (
-                u,
-                v
-            ) not in self.active_disruptions:
+            if (u, v) not in self.active_disruptions:
 
                 available_edges.append(
                     (u, v)
                 )
 
         if not available_edges:
-
             return None
 
         return random.choice(
@@ -814,51 +476,38 @@ class DisruptionEngine:
         )
 
     # ========================================================
-    # RANDOM DISRUPTION
+    # CREATE RANDOM DISRUPTION
     # ========================================================
 
     def create_random_disruption(self):
 
         """
-        Randomly creates one of:
+        Randomly creates:
 
-            blocked
             accident
-            construction
+            OR
+            blocked road
         """
 
         road = self.get_random_road()
 
         if road is None:
-
             return None
 
         u, v = road
 
         disruption_type = random.choice(
             [
-                "blocked",
                 "accident",
-                "construction"
+                "blocked"
             ]
         )
 
-        # ====================================================
-        # BLOCKED
-        # ====================================================
-
-        if disruption_type == "blocked":
-
-            success = self.block_road(
-                u,
-                v
-            )
-
-        # ====================================================
+        # ----------------------------------------------------
         # ACCIDENT
-        # ====================================================
+        # ----------------------------------------------------
 
-        elif disruption_type == "accident":
+        if disruption_type == "accident":
 
             success = self.add_accident(
                 u,
@@ -866,21 +515,16 @@ class DisruptionEngine:
                 factor=3
             )
 
-        # ====================================================
-        # CONSTRUCTION
-        # ====================================================
+        # ----------------------------------------------------
+        # BLOCKED
+        # ----------------------------------------------------
 
         else:
 
-            success = self.add_construction(
+            success = self.block_road(
                 u,
-                v,
-                factor=2
+                v
             )
-
-        # ====================================================
-        # RETURN RESULT
-        # ====================================================
 
         if success:
 
