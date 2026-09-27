@@ -37,11 +37,30 @@ BLOCK_PROBABILITY = 0.40
 ACCIDENT_PROBABILITY = 0.35
 CONSTRUCTION_PROBABILITY = 0.25
 
-# Accident makes the road this many times more expensive
+# Accident makes travel time this many times larger
 ACCIDENT_FACTOR = 3
 
-# Construction makes the road this many times more expensive
+# Construction makes travel time this many times larger
 CONSTRUCTION_FACTOR = 2
+
+
+# ============================================================
+# ROAD SPEED CONFIGURATION
+# ============================================================
+
+# Average road speeds in km/h.
+# These are converted to m/s before calculating travel time.
+
+ROAD_SPEEDS_KMH = {
+    "motorway": 100,
+    "trunk": 80,
+    "primary": 60,
+    "secondary": 50,
+    "tertiary": 40,
+    "unclassified": 30
+}
+
+DEFAULT_SPEED_KMH = 30
 
 
 # ============================================================
@@ -72,15 +91,35 @@ COLOR_BLOCKED = (220, 50, 50)
 # ============================================================
 
 ROUTE_COLORS = [
-    (255, 87, 34),      # Bright Orange
-    (156, 39, 176),     # Purple
-    (0, 230, 118),      # Neon Green
-    (255, 235, 59),     # Yellow
-    (0, 176, 255),      # Cyan
-    (255, 64, 129),     # Pink
-    (121, 85, 72),      # Brown
-    (63, 81, 181),      # Indigo
+    (255, 87, 34),
+    (156, 39, 176),
+    (0, 230, 118),
+    (255, 235, 59),
+    (0, 176, 255),
+    (255, 64, 129),
+    (121, 85, 72),
+    (63, 81, 181),
 ]
+
+
+# ============================================================
+# ROAD SPEED HELPER
+# ============================================================
+
+def get_average_speed(highway):
+    """
+    Returns average road speed in m/s.
+    """
+
+    speed_kmh = ROAD_SPEEDS_KMH.get(
+        highway,
+        DEFAULT_SPEED_KMH
+    )
+
+    # km/h -> m/s
+    speed_ms = speed_kmh / 3.6
+
+    return speed_ms
 
 
 # ============================================================
@@ -219,12 +258,38 @@ class PBFHandler(osmium.SimpleHandler):
 
                 lon2, lat2 = self.nodes[v]
 
+                # ------------------------------------------------
+                # DISTANCE
+                # ------------------------------------------------
+
                 dist = haversine_distance(
                     lon1,
                     lat1,
                     lon2,
                     lat2
                 )
+
+                # ------------------------------------------------
+                # AVERAGE SPEED
+                # ------------------------------------------------
+
+                avg_speed = get_average_speed(
+                    highway
+                )
+
+                # ------------------------------------------------
+                # NORMAL TRAVEL TIME
+                # ------------------------------------------------
+
+                # seconds = meters / meters-per-second
+
+                normal_time = (
+                    dist / avg_speed
+                )
+
+                # ------------------------------------------------
+                # ADD NODES
+                # ------------------------------------------------
 
                 self.graph.add_node(
                     u,
@@ -236,25 +301,57 @@ class PBFHandler(osmium.SimpleHandler):
                     pos=self.nodes[v]
                 )
 
-                # Forward direction
+                # ------------------------------------------------
+                # FORWARD DIRECTION
+                # ------------------------------------------------
+
                 self.graph.add_edge(
                     u,
                     v,
-                    weight=dist,
+
+                    # Physical distance
+                    distance=dist,
+
+                    # Average vehicle speed
+                    avg_speed=avg_speed,
+
+                    # Original travel time
+                    normal_time=normal_time,
+
+                    # IMPORTANT:
+                    # Dijkstra will use this.
+                    # Initially it equals normal_time.
+                    weight=normal_time,
+
                     blocked=False,
+
                     highway=highway,
+
                     disruption=None
                 )
 
-                # Reverse direction
+                # ------------------------------------------------
+                # REVERSE DIRECTION
+                # ------------------------------------------------
+
                 if not is_oneway:
 
                     self.graph.add_edge(
                         v,
                         u,
-                        weight=dist,
+
+                        distance=dist,
+
+                        avg_speed=avg_speed,
+
+                        normal_time=normal_time,
+
+                        weight=normal_time,
+
                         blocked=False,
+
                         highway=highway,
+
                         disruption=None
                     )
 
@@ -317,7 +414,7 @@ def load_local_pbf(
     ]
 
     print(
-        f"Done!"
+        "Done!"
     )
 
     print(
@@ -419,6 +516,82 @@ def convert_coords_to_world(
 
 
 # ============================================================
+# ROUTE TIME CALCULATION
+# ============================================================
+
+def calculate_route_time(
+    graph,
+    route
+):
+
+    if not route or len(route) < 2:
+
+        return 0.0
+
+    total_time = 0.0
+
+    for u, v in zip(
+        route[:-1],
+        route[1:]
+    ):
+
+        if not graph.has_edge(u, v):
+
+            return float("inf")
+
+        edge = graph[u][v]
+
+        if edge.get(
+            "blocked",
+            False
+        ):
+
+            return float("inf")
+
+        total_time += edge.get(
+            "weight",
+            edge.get(
+                "normal_time",
+                0.0
+            )
+        )
+
+    return total_time
+
+
+# ============================================================
+# ROUTE DISTANCE
+# ============================================================
+
+def calculate_route_distance(
+    graph,
+    route
+):
+
+    if not route or len(route) < 2:
+
+        return 0.0
+
+    total_distance = 0.0
+
+    for u, v in zip(
+        route[:-1],
+        route[1:]
+    ):
+
+        if not graph.has_edge(u, v):
+
+            return float("inf")
+
+        total_distance += graph[u][v].get(
+            "distance",
+            0.0
+        )
+
+    return total_distance
+
+
+# ============================================================
 # CAR CLASS
 # ============================================================
 
@@ -446,7 +619,13 @@ class Car:
 
         self.color = color
 
-        # Random speed for each car
+        # ----------------------------------------------------
+        # Visual movement speed.
+        #
+        # This is NOT the road average speed.
+        # Road average speed is stored on every edge.
+        # ----------------------------------------------------
+
         self.speed = random.uniform(
             2.0,
             5.0
@@ -470,6 +649,18 @@ class Car:
             ]
         )
 
+        # ----------------------------------------------------
+        # Time statistics
+        # ----------------------------------------------------
+
+        self.normal_route_time = 0.0
+
+        self.current_route_time = 0.0
+
+        self.delay = 0.0
+
+        self.route_distance = 0.0
+
         self.recalculate_path()
 
     # ========================================================
@@ -480,7 +671,8 @@ class Car:
 
         if (
             self.current_node is None
-            or self.dest_node is None
+            or
+            self.dest_node is None
         ):
 
             self.path = []
@@ -518,6 +710,57 @@ class Car:
 
             self.path_index = 0
 
+            # ------------------------------------------------
+            # Current route statistics
+            # ------------------------------------------------
+
+            self.current_route_time = (
+                calculate_route_time(
+                    self.graph,
+                    self.path
+                )
+            )
+
+            self.route_distance = (
+                calculate_route_distance(
+                    self.graph,
+                    self.path
+                )
+            )
+
+            # ------------------------------------------------
+            # Calculate what this route would take without
+            # currently active disruption weights.
+            # ------------------------------------------------
+
+            normal_time = 0.0
+
+            for u, v in zip(
+                self.path[:-1],
+                self.path[1:]
+            ):
+
+                edge = self.graph[u][v]
+
+                normal_time += edge.get(
+                    "normal_time",
+                    edge.get(
+                        "weight",
+                        0.0
+                    )
+                )
+
+            self.normal_route_time = (
+                normal_time
+            )
+
+            self.delay = max(
+                0.0,
+                self.current_route_time
+                -
+                self.normal_route_time
+            )
+
             if len(self.path) > 1:
 
                 self.next_node = (
@@ -543,13 +786,26 @@ class Car:
                 self.current_node
             )
 
+            self.current_route_time = (
+                float("inf")
+            )
+
+            self.normal_route_time = (
+                float("inf")
+            )
+
+            self.delay = float("inf")
+
     # ========================================================
     # UPDATE
     # ========================================================
 
     def update(self):
 
+        # ----------------------------------------------------
         # Destination reached
+        # ----------------------------------------------------
+
         if (
             not self.path
             or
@@ -605,12 +861,14 @@ class Car:
 
         dx = (
             target_x
-            - self.pos[0]
+            -
+            self.pos[0]
         )
 
         dy = (
             target_y
-            - self.pos[1]
+            -
+            self.pos[1]
         )
 
         distance = math.hypot(
@@ -678,12 +936,14 @@ class Car:
 
         dx = (
             target_x
-            - self.pos[0]
+            -
+            self.pos[0]
         )
 
         dy = (
             target_y
-            - self.pos[1]
+            -
+            self.pos[1]
         )
 
         dist = math.hypot(
@@ -706,7 +966,6 @@ class Car:
         else:
 
             nx_vec = 0
-
             ny_vec = 0
 
         world_x = (
@@ -737,6 +996,7 @@ class Car:
     ):
 
         if not self.path:
+
             return
 
         sx, sy = (
@@ -775,16 +1035,6 @@ def generate_clustered_routes(
     num_cars
 ):
 
-    """
-    Uses at least 50% of the available road
-    segments as starting points for route
-    generation.
-
-    Since NUM_CARS limits how many routes can
-    simultaneously contain vehicles, the number
-    of active routes is capped at NUM_CARS.
-    """
-
     roads = list(
         G.edges()
     )
@@ -802,10 +1052,6 @@ def generate_clustered_routes(
 
         return [], []
 
-    # --------------------------------------------------------
-    # At least half the roads
-    # --------------------------------------------------------
-
     requested_routes = math.ceil(
         total_roads * 0.5
     )
@@ -814,10 +1060,6 @@ def generate_clustered_routes(
         requested_routes,
         num_cars
     )
-
-    # --------------------------------------------------------
-    # Randomize roads
-    # --------------------------------------------------------
 
     random.shuffle(
         roads
@@ -842,25 +1084,16 @@ def generate_clustered_routes(
         f"{len(selected_roads) / total_roads * 100:.2f}%"
     )
 
-    # --------------------------------------------------------
-    # Destination candidates
-    # --------------------------------------------------------
-
     all_nodes = list(
         G.nodes()
     )
 
     routes = []
 
-    # --------------------------------------------------------
-    # Generate route for each selected road
-    # --------------------------------------------------------
-
     for road in selected_roads:
 
         start_node = road[0]
 
-        # Randomize destination order
         destinations = all_nodes.copy()
 
         random.shuffle(
@@ -872,6 +1105,7 @@ def generate_clustered_routes(
         for candidate in destinations:
 
             if candidate == start_node:
+
                 continue
 
             try:
@@ -893,6 +1127,7 @@ def generate_clustered_routes(
                 continue
 
         if destination is None:
+
             continue
 
         route_color = (
@@ -915,10 +1150,6 @@ def generate_clustered_routes(
 
         })
 
-    # --------------------------------------------------------
-    # Randomize route order
-    # --------------------------------------------------------
-
     random.shuffle(
         routes
     )
@@ -936,10 +1167,6 @@ def generate_clustered_routes(
         )
 
         return [], []
-
-    # --------------------------------------------------------
-    # Assign cars
-    # --------------------------------------------------------
 
     car_configs = []
 
@@ -983,7 +1210,7 @@ def draw_disruption_panel(
         disruption_engine.get_active_disruptions()
     )
 
-    panel_width = 270
+    panel_width = 300
 
     panel_height = 35 + (
         len(active) * 22
@@ -1052,6 +1279,103 @@ def draw_disruption_panel(
 
 
 # ============================================================
+# DRAW TRAFFIC STATISTICS
+# ============================================================
+
+def draw_traffic_statistics(
+    screen,
+    font,
+    cars
+):
+
+    if not cars:
+
+        return
+
+    valid_cars = [
+        car
+        for car in cars
+        if math.isfinite(
+            car.current_route_time
+        )
+    ]
+
+    if not valid_cars:
+
+        return
+
+    avg_normal_time = (
+        sum(
+            car.normal_route_time
+            for car in valid_cars
+            if math.isfinite(
+                car.normal_route_time
+            )
+        )
+        /
+        max(
+            1,
+            len(valid_cars)
+        )
+    )
+
+    avg_current_time = (
+        sum(
+            car.current_route_time
+            for car in valid_cars
+        )
+        /
+        len(valid_cars)
+    )
+
+    avg_delay = (
+        sum(
+            car.delay
+            for car in valid_cars
+            if math.isfinite(
+                car.delay
+            )
+        )
+        /
+        len(valid_cars)
+    )
+
+    x = 10
+    y = 720
+
+    lines = [
+
+        f"Avg normal time: "
+        f"{avg_normal_time:.2f} s",
+
+        f"Avg current time: "
+        f"{avg_current_time:.2f} s",
+
+        f"Avg delay: "
+        f"{avg_delay:.2f} s"
+
+    ]
+
+    for line in lines:
+
+        text = font.render(
+            line,
+            True,
+            COLOR_TEXT
+        )
+
+        screen.blit(
+            text,
+            (
+                x,
+                y
+            )
+        )
+
+        y += 18
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1073,7 +1397,8 @@ def main():
     )
 
     pygame.display.set_caption(
-        "Traffic Simulator + Disruption Engine"
+        "Traffic Simulator + "
+        "Travel Time + Disruption Engine"
     )
 
     clock = pygame.time.Clock()
@@ -1181,10 +1506,14 @@ def main():
 
     while running:
 
-        # Time passed since previous frame
+        # ----------------------------------------------------
+        # TIME PASSED
+        # ----------------------------------------------------
+
         dt = (
             clock.get_time()
-            / 1000.0
+            /
+            1000.0
         )
 
         # ====================================================
@@ -1230,7 +1559,11 @@ def main():
                     -
                     (mx - pan_x)
                     *
-                    (new_zoom / zoom)
+                    (
+                        new_zoom
+                        /
+                        zoom
+                    )
                 )
 
                 pan_y = (
@@ -1238,7 +1571,11 @@ def main():
                     -
                     (my - pan_y)
                     *
-                    (new_zoom / zoom)
+                    (
+                        new_zoom
+                        /
+                        zoom
+                    )
                 )
 
                 zoom = new_zoom
@@ -1293,7 +1630,10 @@ def main():
                             15.0 / zoom
                         )
 
+                        # ------------------------------------
                         # Find closest road
+                        # ------------------------------------
+
                         for u, v in G.edges():
 
                             p1 = world_pos[u]
@@ -1302,12 +1642,14 @@ def main():
 
                             mid_x = (
                                 p1[0]
-                                + p2[0]
+                                +
+                                p2[0]
                             ) / 2
 
                             mid_y = (
                                 p1[1]
-                                + p2[1]
+                                +
+                                p2[1]
                             ) / 2
 
                             dist = math.hypot(
@@ -1331,7 +1673,7 @@ def main():
                             )
 
                             # --------------------------------
-                            # If already blocked -> restore
+                            # Already blocked -> restore
                             # --------------------------------
 
                             if G[u][v].get(
@@ -1359,7 +1701,10 @@ def main():
                                     "Road manually blocked!"
                                 )
 
+                            # --------------------------------
                             # Recalculate routes
+                            # --------------------------------
+
                             for car in cars:
 
                                 car.recalculate_path()
@@ -1431,7 +1776,6 @@ def main():
                     disruption["type"]
                 )
 
-                # Store expiration time
                 active_disruption_timers[
                     road
                 ] = DISRUPTION_DURATION
@@ -1442,7 +1786,10 @@ def main():
                     f"on road {road}"
                 )
 
+                # --------------------------------------------
                 # Recalculate every car
+                # --------------------------------------------
+
                 for car in cars:
 
                     car.recalculate_path()
@@ -1494,7 +1841,10 @@ def main():
                 f"Road {road} restored."
             )
 
+            # --------------------------------------------
             # Recalculate routes
+            # --------------------------------------------
+
             for car in cars:
 
                 car.recalculate_path()
@@ -1798,6 +2148,16 @@ def main():
             screen,
             font,
             disruption_engine
+        )
+
+        # ====================================================
+        # 6. TRAFFIC STATISTICS
+        # ====================================================
+
+        draw_traffic_statistics(
+            screen,
+            font,
+            cars
         )
 
         # ====================================================
